@@ -1,0 +1,47 @@
+Hey Joe,
+
+If it's okay, I wanted to run the below initial analysis of the data for assignment 1.
+
+After reading the data, here's the summary:
+
+```
+small <- read_csv("1000 Sales Records.csv", col_types="fffffcncnnnnn")
+summary(small)
+                               Region              Country   
+ Middle East and North Africa     :138   Cuba          : 11  
+ North America                    : 19   Malaysia      : 10  
+ Asia                             :136   Czech Republic: 10  
+ Sub-Saharan Africa               :262   Zimbabwe      : 10  
+ Europe                           :267   Bahrain       : 10  
+ Central America and the Caribbean: 99   Fiji          :  9  
+ Australia and Oceania            : 79   (Other)       :940  
+           Item Type   Sales Channel Order Priority   Order Date        
+ Beverages      :101   Offline:520   M:242          Min.   :2010-01-01  
+ Vegetables     : 97   Online :480   C:262          1st Qu.:2011-11-14  
+ Office Supplies: 89                 H:228          Median :2013-09-24  
+ Baby Food      : 87                 L:268          Mean   :2013-09-19  
+ Personal Care  : 87                                3rd Qu.:2015-07-03  
+ Snacks         : 82                                Max.   :2017-07-26  
+ (Other)        :457                                                    
+    Order ID           Ship Date            Units Sold     Unit Price    
+ Min.   :102928006   Min.   :2010-01-15   Min.   :  13   Min.   :  9.33  
+ 1st Qu.:328074026   1st Qu.:2011-12-11   1st Qu.:2420   1st Qu.: 81.73  
+ Median :556609714   Median :2013-10-12   Median :5184   Median :154.06  
+ Mean   :549681325   Mean   :2013-10-14   Mean   :5054   Mean   :262.11  
+ 3rd Qu.:769694483   3rd Qu.:2015-07-28   3rd Qu.:7537   3rd Qu.:421.89  
+ Max.   :995529830   Max.   :2017-09-12   Max.   :9998   Max.   :668.27  
+                                                                         
+   Unit Cost      Total Revenue       Total Cost       Total Profit      
+ Min.   :  6.92   Min.   :   2043   Min.   :   1417   Min.   :    532.6  
+ 1st Qu.: 56.67   1st Qu.: 281192   1st Qu.: 164932   1st Qu.:  98376.1  
+ Median : 97.44   Median : 754939   Median : 464726   Median : 277226.0  
+ Mean   :184.97   Mean   :1327322   Mean   : 936119   Mean   : 391202.6  
+ 3rd Qu.:263.33   3rd Qu.:1733503   3rd Qu.:1141750   3rd Qu.: 548456.8  
+ Max.   :524.96   Max.   :6617210   Max.   :5204978   Max.   :1726181.4  
+ ```
+
+We notice there is no missing data and there are about the same number of categories as continuous features.
+
+Continuous variable exploration
+
+Distribution

@@ -1,0 +1,394 @@
+---
+title: "Sales Channel Prediction"
+author: "Cliff Lee"
+date: "2023-09-23"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libraries, echo=FALSE, warning=FALSE, message=FALSE}
+library(class)
+library(e1071)
+library(tidyverse)
+library(lubridate)
+library(corrplot)
+library(reshape2)
+library(caret)
+library(olsrr)
+library(fastDummies)
+library(MASS)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+
+
+```
+
+```{r load, echo=FALSE, warning=FALSE, message=FALSE}
+small <- read_csv("1000 Sales Records.csv", col_types="fffffcncnnnnn")
+#small <- read_csv("10000 Sales Records.csv", col_types="fffffcncnnnnn")
+```
+
+```{r cleanup, echo=FALSE, warning=FALSE, message=FALSE}
+small$`Order Date` <- mdy(small$`Order Date`)
+small$`Ship Date` <- mdy(small$`Ship Date`)
+  
+```
+
+## Exploring the data
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+summary(small)
+```
+## Uniqueness of Order ID
+```{r}
+small %>% group_by(`Order ID`) %>% summarise(total_count=n()) %>% filter(total_count > 1)
+```
+
+## Normalizing Dates
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+start_date <- as.Date("01/01/2010","%d/%m/%Y")
+small$`Ship Date` <- difftime(small$`Ship Date`, start_date, units = "days")
+small$`Order Date` <- difftime(small$`Order Date`, start_date, units = "days")
+
+# Add new feature: dates between order and ship
+small$`Diff Date` <- small$`Ship Date` - small$`Order Date`
+
+```
+
+### Colinearity
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+small_numeric <- small %>% dplyr::select(where(is.numeric))
+small_correlations <- cor(small_numeric)
+corrplot(small_correlations)
+
+```
+## Histograms of continuous variables
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+s_df <- small_numeric %>% melt()
+s_df %>% ggplot(aes(x= value)) + geom_histogram(color='#023020', fill='gray',bins=50) + facet_wrap(~variable, scales = 'free',  ncol = 4) + theme_bw()
+
+```
+## Scatter plot of numeric variables
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+featurePlot(small_numeric[,1:ncol(small_numeric)-1], small_numeric[,6], plot = "pairs", type = c("p", "smooth"), span = 1)
+
+```
+### linear regression assumptions violated
+quantifyinghealth.com/check-linear-regression-assumptions-in-r/
+1. How to check linearity
+2. check the independence of errors
+3. constant variance of errors
+4. normality of errors
+
+
+```{r}
+model = lm(small$`Units Sold` ~ small$`Total Revenue`)
+plot(model, 1)
+# we see the fitted vs residues does not have a general linear shape 
+  
+
+# error distribution is not exactly normal
+hist(model$residuals)
+plot(model, 2)
+
+```
+
+## time objects
+```{r}
+# no relationship with total revenue
+ggplot(aes(y = `Total Revenue`, x = as.numeric(`Ship Date`)), data = small) + geom_point()
+
+# no relationship with order date
+ggplot(aes(y = `Units Sold`, x = as.numeric(`Order Date`)), data = small) + geom_point()
+
+```
+
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+small %>% ggplot() + geom_bar(mapping=aes(y=Region))
+
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+small %>% ggplot() + geom_boxplot(mapping = aes(x=`Item Type`, y=`Total Profit`), fill='red')
+
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+## between factors
+ggplot(data = small) +  geom_count(mapping = aes(x = `Sales Channel`, y = `Item Type`))
+ggplot(data = small) +  geom_count(mapping = aes(x = `Sales Channel`, y = `Country`))
+
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+## tiles
+small %>% count(`Item Type`, `Sales Channel`) %>% ggplot(mapping = aes(x=`Sales Channel`, y=`Item Type`)) + geom_tile(mapping=aes(fill=n))
+small %>% count(`Country`, `Sales Channel`) %>% ggplot(mapping = aes(x=`Sales Channel`, y=`Country`)) + geom_tile(mapping=aes(fill=n))
+small %>% count(`Region`, `Sales Channel`) %>% ggplot(mapping = aes(x=`Sales Channel`, y=`Region`)) + geom_tile(mapping=aes(fill=n))
+small %>% count(`Order Priority`, `Sales Channel`) %>% ggplot(mapping = aes(x=`Sales Channel`, y=`Order Priority`)) + geom_tile(mapping=aes(fill=n))
+
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+chisq.test(table(small$`Sales Channel`, small$`Item Type`))
+chisq.test(table(small$`Sales Channel`, small$`Country`))
+chisq.test(table(small$`Sales Channel`, small$`Order Priority`))
+chisq.test(table(small$`Sales Channel`, small$`Region`))
+chisq.test(table(small$`Sales Channel`, small$`Order Date`))
+chisq.test(table(small$`Sales Channel`, small$`Total Profit`))
+chisq.test(table(small$`Sales Channel`, small$`Unit Cost`))
+
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+featurePlot(small_numeric[,1:ncol(small_numeric)-1], small_numeric[,6], plot = "pairs", type = c("p", "smooth"), span = 1)
+
+```
+## Linear model
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+linear_model <- lm(`Total Profit` ~ `Total Cost` + `Item Type` + `Total Cost`, data=small)
+summary(linear_model)
+```
+
+```{r sample, echo=FALSE, warning=FALSE, message=FALSE}
+set.seed(12341)
+sample_set <- sample(nrow(small), round(nrow(small)*0.75), replace=FALSE)
+small_train <- small[sample_set,] #%>% dplyr::select(-c(Country))
+small_test <- small[-sample_set,] #%>% dplyr::select(-c(Country))
+
+```
+
+### Linear Model 2
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+linear_model <- lm(`Total Profit` ~ `Diff Date` + `Ship Date` + `Order Date`, data=small)
+summary(linear_model)
+```
+
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+small_train_country <- small_train %>% dplyr::select(Country)
+small_test_country <- small_test %>% dplyr::select(Country)
+
+# balance the countries, some appear a few times in one set.
+country_diff <- anti_join(small_test_country, small_train_country)
+
+# we have a data problem here. Some countries only have a count of 1. They should be moved to the training set and out of the test set
+
+country_count <- country_diff %>% group_by(Country) %>% summarise(total_count=n()) %>% arrange(total_count)
+
+single_country_names <- country_count %>% filter (total_count == 1) %>% dplyr::select(Country) %>% as.vector()
+
+# now move them to the training set
+small_test_single_countries <- small_test %>% filter(Country %in% single_country_names$Country)
+
+small_train <- rbind(small_train, small_test_single_countries)
+
+# remove them from the test set
+small_test <- small_test %>% dplyr::filter(!Country %in% single_country_names$Country)
+
+nrow(small_train)
+nrow(small_test)
+
+# now sample the other name
+multiple_country_names <- country_count %>% filter (total_count > 1) %>% dplyr::select(Country) %>% as.vector()
+
+# Loop through the test countries that have a count > 1
+for (country_name in multiple_country_names$Country) {
+  # find the rows in test dataframe with this country name
+  multiple_country_dataframe <- small_test %>% filter(Country == country_name)
+  
+  # sample one...
+  multiple_country <- multiple_country_dataframe[sample(nrow(multiple_country_dataframe),1),]
+  
+  # and move the one row to the training set
+  small_train <- rbind(small_train, multiple_country)
+  small_test <- small_test %>% dplyr::filter(`Order ID` != multiple_country$`Order ID`)
+
+  nrow(small_train)
+  nrow(small_test)
+}
+```
+
+## Linear Regression
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+small_linear <- lm(`Total Profit` ~., data=small_train)
+#small_linear <- lm(`Total Profit` ~., data=(small_train %>% dplyr::select(-Country)))
+
+
+
+p <- predict(small_linear, small_test)
+RMSE(p, small_test$`Total Profit`)  # 3.082376e-09
+R2(p, small_test$`Total Profit`)    # 1 - predicted 100%, as expected from the model.
+
+```
+## Logistic Regression
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+small_logistic <- glm(small_train, family=binomial, formula=`Sales Channel` ~ .)
+small_predict <- predict(small_logistic, small_test, type='response')
+small_predict <- ifelse(small_predict >= 0.5, 1, 0)
+small_predict_glm <-table(small_test$`Sales Channel`, small_predict)
+sum(diag(small_predict_glm))/sum(small_predict_glm)
+
+```
+## LDA 
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+small_lda <- lda(`Sales Channel` ~ Region + `Item Type` , small_train)
+p1 <- predict(small_lda, small_test)$class
+tab <- table(Predicted = p1, Actual = small_test$`Sales Channel`)
+cat("Accuracy is:", sum(diag(tab))/sum(tab))
+
+```
+### Naive Bayes
+```{r}
+summary(small_train)
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+small_train_nb <- small_train #%>% dplyr::select(-c(`Unit Cost`,`Total Cost`,`Order ID`,`Ship Date`,`Diff Date`))
+small_test_nb <- small_test #%>% dplyr::select(-c(`Unit Cost`,`Total Cost`,`Order ID`,`Ship Date`,`Diff Date`))
+small_model_nb <- naiveBayes(`Sales Channel` ~ . -`Order ID`-`Ship Date`-`Unit Cost`-`Total Cost`, data=small_train_nb, laplace=1)
+small_predict_nb <- predict(small_model_nb, small_test_nb, type="class")
+small_table_nb <- table(small_test_nb$`Sales Channel`, small_predict_nb)
+sum(diag(small_table_nb))/nrow(small_test_nb)
+#small_model_nb
+```
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+normalize <- function(x) {
+  return ((x- min(x)) /( max(x) - min(x)))
+}
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+## Checking the train, test sales channel balances
+round(prop.table(table(dplyr::select(small_train_nb, `Sales Channel`))),2)
+round(prop.table(table(dplyr::select(small_test_nb, `Sales Channel`))),2)
+round(prop.table(table(dplyr::select(small_test, `Sales Channel`))),2)
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+small_decision_tree <- rpart(`Sales Channel` ~., method="class", data=small_train)
+small_pred <- predict(small_decision_tree, small_test, type='class')
+results <- table(small_test$`Sales Channel`, small_pred)
+results
+
+sum(diag(results)/nrow(small_test))
+
+#rpart.plot(small_decision_tree)
+```
+### Random forest
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+set.seed(101)
+small <- small %>% 
+        rename("country" = "Country",
+              "item_type" = "Item Type",
+              "order_date" = "Order Date",
+              "order_id" = "Order ID",
+              "order_priority" = "Order Priority",
+              "region" = "Region",
+              "sales_channel" = "Sales Channel",
+              "ship_date" = "Ship Date",
+              "total_cost" = "Total Cost",
+              "total_profit" = "Total Profit",
+              "total_revenue" = "Total Revenue",
+              "unit_cost" = "Unit Cost",
+              "unit_price" = "Unit Price",
+              "units_sold" = "Units Sold")
+
+
+train <- sample(1:nrow(small), nrow(small)*0.75)
+small_random_forest <- randomForest(sales_channel ~.-country, data=small, proximity=TRUE)
+```
+> small_random_forest <- randomForest(`Sales Channel` ~  Region + `Total Cost` + `Order Priority` + `Item Type` + Country, data=small, proximity=TRUE)
+Error in eval(predvars, data, env) : object 'Total Cost' not found
+
+
+> small_random_forest <- randomForest(sales_channel ~., data=small, proximity=TRUE)
+Error in randomForest.default(m, y, ...) : 
+  Can not handle categorical predictors with more than 53 categories.
+> small_random_forest <- randomForest(sales_channel ~.-country, data=small, proximity=TRUE)
+> small_random_forest
+
+
+
+
+
+### KNN
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+sales_labels <- small %>% dplyr::select(`Sales Channel`)
+small_dummies <- dummy_cols(small)
+small_dummies <- small_dummies %>%
+  mutate(
+    `Diff Date` = normalize(as.numeric(`Diff Date`)),
+    `Order Date` = normalize(as.numeric(`Order Date`)),
+    `Ship Date` = normalize(as.numeric(`Ship Date`)),
+    `Order ID` = normalize(as.numeric(`Order ID`)),
+    `Units Sold` = normalize(as.numeric(`Units Sold`)),
+    `Unit Price` = normalize(as.numeric(`Unit Price`)),
+    `Unit Cost` = normalize(as.numeric(`Unit Cost`)),
+    `Total Revenue` = normalize(as.numeric(`Total Revenue`)),
+    `Total Cost` = normalize(as.numeric(`Total Cost`)),
+    `Total Profit` = normalize(as.numeric(`Total Profit`))
+    )
+sample_dummies_index <- sample(nrow(small_dummies), round(nrow(small_dummies)*0.75), replace=FALSE)
+small_train <- small_dummies[sample_dummies_index,]  %>% dplyr::select(-c(Country, Region, `Item Type`,`Sales Channel`, `Sales Channel_Offline`, `Sales Channel_Online`, `Order Priority` ))
+small_test <- small_dummies[-sample_dummies_index,]  %>% dplyr::select(-c(Country, Region, `Item Type`,`Sales Channel`, `Sales Channel_Offline`, `Sales Channel_Online`, `Order Priority` ))
+small_train_labels <- sales_labels[sample_dummies_index,]
+small_test_labels <- sales_labels[-sample_dummies_index,]
+
+knn_accuracies <- c()
+best_neighbor <- 1
+max_accuracy <- 0
+neighbor_range <- 1:30
+for (neighbors in neighbor_range) {
+  small_knn_pred <- knn(train = small_train, test = small_test, cl = small_train_labels$`Sales Channel`, k=neighbors)
+  small_knn_pred_table <- table(small_test_labels$`Sales Channel`, small_knn_pred)
+  #knn_accuracy <- sum(diag(small_knn_pred_table))/sum(small_knn_pred_table)
+  knn_accuracy <- sum(diag(small_knn_pred_table))/nrow(small_test)
+  
+  if (max_accuracy < knn_accuracy) { 
+      max_accuracy <- knn_accuracy
+      best_neighbor <- neighbors
+  }
+  knn_accuracies <- append(knn_accuracies, knn_accuracy)
+}
+
+paste0("Best neighbor:",best_neighbor, ", Accuracy:", max_accuracy )
+plot(x=neighbor_range, y=knn_accuracies)
+```
+
+
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+```
+

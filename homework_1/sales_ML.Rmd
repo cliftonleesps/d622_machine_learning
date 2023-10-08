@@ -1,0 +1,566 @@
+---
+title: "Machine Learning with Sales Records"
+subtitle: 'Data 622 - Homework 1'
+author: "Cliff Lee"
+date: "2023-10-07"
+output: 
+  html_document:
+    theme: cerulean
+    toc: yes
+    toc_float:
+      collapsed: true
+
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libraries, echo=FALSE, warning=FALSE, message=FALSE}
+library(class)
+library(e1071)
+library(tidyverse)
+library(lubridate)
+library(corrplot)
+library(reshape2)
+library(caret)
+library(olsrr)
+library(fastDummies)
+library(MASS)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+library(kableExtra)
+```
+
+### Brief
+
+This data set includes features for a fictitious global retail company that sells household products, presumably in stores and online. The continuous features describe financial cost and sales related metrics while the categorical features describe the company products and geographic data. Additionally, there are two time-based features regarding sales orders as well.
+
+I noticed the data set includes a binary category feature for sales channel (offline versus online), so I decided to see if the other features could predict if a product favored a particular channel, given its sales and geographic data. Even though the data set was artificially generated, I can easily see where an operations director needs to know if more sales occurred for a given product, region and time. 
+
+Exploring the data shows a few clear indications: several of the continuous variables are collinear (greater than 0.6) and the categorical variables are well balanced with no data input errors. Also, no features had any missing data so no imputation was required. For these reasons, I chose to use the k-nearest neighbor (KNN) and naive Bayes classifier to predict the sales channel for each observation as the data set satisfies and overcomes each model's requirements and weaknesses.
+
+However after training each model on small (1000 records) and large data sets (10,000 records), I found the performance to be mixed at best where they didn't predict better than 57% and even lower at 50% for the larger data set. Their respective accuracy rates are below:
+
+```{r summary_accuracy, echo=FALSE, warning=FALSE, message=FALSE}
+df <- data.frame( Model = c("KNN", "Naive Bayes"), "Accuracy 1k Records" = c(0.57, 0.57), "Accuracy 10k Records" = c(0.5,0.49))
+df %>% kbl() %>% kable_styling()
+```
+
+Additionally, the KNN model determined that the ideal number of neighbors was either 5 (small data set) or 3 (large). Lastly, the training time for the KNN model took minutes and was much slower than the naive Bayes (seconds) for barely improved accuracy.
+
+
+
+
+
+
+### Dataset Exploration
+
+Starting from data sets of 1000 and 10,000 records, we read the input CSV with pre-defined column types. The column labels are as follows:
+
+```{r intialized_data_frame, echo=TRUE, warning=FALSE, message=FALSE}
+# Load the smaller data set with factors, numbers and character field types defined
+small <- read_csv("1000 Sales Records.csv", col_types="fffffcncnnnnn")
+large <- read_csv("5o0000 Sales Records.csv", col_types="fffffcncnnnnn")
+colnames(small)
+```
+
+Judging from the labels for the continuous features, there are natural groups that instantly appear:
+
+* Units - sold, price and cost features
+* Total - revenue, cost, profit
+* Date - order, ship
+
+The only continuous feature that stands alone is the order ID as it's presumably a meta data field assigned to identify a row and not recorded by sales.
+
+### Data Set Summary
+
+From the data set summary, we see no missing values for any variables. If there were, we would have to try to impute values as to not diverge from the feature medians.
+
+```{r summary_small, echo=TRUE, warning=FALSE, message=FALSE}
+summary(small)
+```
+```{r summary_large, echo=TRUE, warning=FALSE, message=FALSE}
+summary(large)
+```
+
+### Exploring Qualitative Factors
+
+For the categorical features, I assume there are no data integrity issues such as the same region, country or item appearing more than once under two different spellings due to data input errors. To confirm this, I re-encoded the alphabetized factor levels and visually checked the spellings of the two largest qualitative features: item types and countries.
+
+#### Item type
+The code below re-encodes the factor levels for item types and prints them in alphabetical order to find typos. None were found.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+# check the item types for the small data set
+i_sort <- as.character(small$`Item Type`) %>% unique() %>% str_sort()
+small$`Item Type` <- factor(small$`Item Type`, levels=i_sort)
+small %>% dplyr::select(`Item Type`) %>% dplyr::count(`Item Type`)
+
+# check the item types for the large data set
+i_sort <- as.character(large$`Item Type`) %>% unique() %>% str_sort()
+large$`Item Type` <- factor(large$`Item Type`, levels=i_sort)
+large %>% dplyr::select(`Item Type`) %>% dplyr::count(`Item Type`)
+
+```
+
+#### Countries
+No typos were found for country names, either.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+# check the country names for the small data set
+c <- as.character(small$Country)
+c_sort <- c %>% unique() %>% str_sort()
+small$Country <- factor(small$Country, levels=c(c_sort))
+small %>% dplyr::select(Country) %>% dplyr::count(Country) %>% dplyr::arrange(Country) %>% print(n=25)
+
+# check the large data set
+c_sort <- as.character(large$`Country`) %>% unique() %>% str_sort()
+large$`Country` <- factor(large$`Country`, levels=c_sort)
+large %>% dplyr::select(`Country`) %>% dplyr::count(`Country`)
+
+```
+
+#### Tiles 
+
+To help explore the relationship between the output sales channel variable, we compare it to item type and countries for both data sets
+
+##### Sales Channel and Item Types
+
+We see a contrast in counts in the left and right columns between the item types and sales channels for both data sets. The counts are higher for the larger data set.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+## tiles
+small %>% count(`Item Type`, `Sales Channel`) %>% ggplot(mapping = aes(x=`Sales Channel`, y=`Item Type`)) + geom_tile(mapping=aes(fill=n)) + ggtitle("Sales Channel and Item Type - Small Data Set")
+large %>% count(`Item Type`, `Sales Channel`) %>% ggplot(mapping = aes(x=`Sales Channel`, y=`Item Type`)) + geom_tile(mapping=aes(fill=n))+ ggtitle("Sales Channel and Item Type - Large Data Set")
+```
+
+We see a similar variation in sales channel to countries, also.
+
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+small %>% count(`Country`, `Sales Channel`) %>% ggplot(mapping = aes(x=`Sales Channel`, y=`Country`)) + geom_tile(mapping=aes(fill=n)) + ggtitle("Sales Channel and Item Type - Small Data Set")
+
+large %>% count(`Country`, `Sales Channel`) %>% ggplot(mapping = aes(x=`Sales Channel`, y=`Country`)) + geom_tile(mapping=aes(fill=n)) + ggtitle("Sales Channel and Item Type - Large Data Set")
+
+```
+
+
+The variation is lower for regions as the horizontal colors do not vary much.
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+small %>% count(`Region`, `Sales Channel`) %>% ggplot(mapping = aes(x=`Sales Channel`, y=`Region`)) + geom_tile(mapping=aes(fill=n)) + ggtitle("Sales Channel and Item Type - Small Data Set")
+
+large %>% count(`Region`, `Sales Channel`) %>% ggplot(mapping = aes(x=`Sales Channel`, y=`Region`)) + geom_tile(mapping=aes(fill=n)) + ggtitle("Sales Channel and Item Type - Large Data Set")
+
+```
+
+And order priority doesn't vary a lot either.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+small %>% count(`Order Priority`, `Sales Channel`) %>% ggplot(mapping = aes(x=`Sales Channel`, y=`Order Priority`)) + geom_tile(mapping=aes(fill=n))
+
+
+```
+
+Finally, we check the class balance for the output variable. As both data sets have an even split for both classes, we can consider them to be balanced. This helps by avoiding resampling training sets.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+df <- data.frame(small$'Sales Channel', large$'Sales Channel')
+summary(df)
+```
+
+### Continuous Variables
+
+First, just to be sure, we confirm that order ID variable does not repeat.
+
+```{r}
+multiple_order_id <- small %>% group_by(`Order ID`) %>% summarise(total_count=n()) %>% filter(total_count > 1)
+
+if (nrow(multiple_order_id) == 0) {
+  paste("All Order IDs are unique")
+}
+```
+
+#### Distributions
+
+There are three types of distributions: uniform; Poisson; undefined. The total-related distributions skew right while the order ID and units sold are uniform. The unit price and unit cost variables appear to be concentrated on lower values (200 and below) but the data is sparse. There distributions appear to be similar for both the large and small data sets.
+
+```{r, echo=TRUE, warning=FALSE, message=FALSE}
+small_numeric <- small %>% dplyr::select(where(is.numeric))
+s_df <- small_numeric %>% melt()
+s_df %>% ggplot(aes(x= value)) + geom_histogram(color='#023020', fill='gray',bins=50) + facet_wrap(~variable, scales = 'free',  ncol = 4) + theme_bw() + ggtitle("Small Data Set Distributions")
+
+```
+```{r, echo=TRUE, warning=FALSE, message=FALSE}
+large_numeric <- large %>% dplyr::select(where(is.numeric))
+s_df <- large_numeric %>% melt()
+s_df %>% ggplot(aes(x= value)) + geom_histogram(color='#023020', fill='gray',bins=50) + facet_wrap(~variable, scales = 'free',  ncol = 4) + theme_bw() + ggtitle("Large Data Set Distributions")
+
+```
+#### Scatter plot of numeric variables
+
+Looking at multiple scatter plots, we see there are relationships between unit variables and total variables. This leads me to believe there's a linear relationship between the relationships along the lines of:
+
+  Unit Cost * Units Sold = Total Cost
+  Unit Price * Units Sold = Total Revenue
+  
+  Total Profit = Total Revenue - Total Cost
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+featurePlot(small_numeric[,1:ncol(small_numeric)-1], small_numeric[,6], plot = "pairs", type = c("p", "smooth"), span = 1)
+
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+featurePlot(large_numeric[,1:ncol(large_numeric)-1], large_numeric[,6], plot = "pairs", type = c("p", "smooth"), span = 1) 
+
+```
+
+### Colinearity
+
+We see from below some of the variables are collinear. So, in some models, one can be eliminated without any loss of information.
+
+```{r, echo=TRUE, warning=FALSE, message=FALSE}
+small_correlations <- cor(small_numeric)
+corrplot(small_correlations)
+```
+
+```{r, echo=TRUE, warning=FALSE, message=FALSE}
+large_correlations <- cor(large_numeric)
+corrplot(large_correlations)
+```
+
+
+####  Date Time Normalization
+At least one model, requires all continuous variables to be normalized. So, for the date time features, the number of days from an 'epoch' date was calculated.
+
+As an experiment, a new feature was created from the two date time objects:  a diff_time between the ship and order date.
+
+```{r date_time_normalization, echo=TRUE, warning=FALSE, message=FALSE}
+# choose an epoch date from the earliest date time
+start_date <- as.Date(min(small$`Order Date`), "%d/%m/%Y")
+
+# Convert the incoming dates to DateTime objects
+small$`Order Date` <- mdy(small$`Order Date`)
+small$`Ship Date` <- mdy(small$`Ship Date`)
+
+# Normalize from the epoch date
+small$`Ship Date` <- difftime(small$`Ship Date`, start_date, units = "days")
+small$`Order Date` <- difftime(small$`Order Date`, start_date, units = "days")
+
+# Add new feature: dates between order and ship
+small$`Diff Date` <- small$`Ship Date` - small$`Order Date`
+
+# Cast the dates as numerics
+small$`Order Date` <- as.numeric(small$`Order Date`)
+small$`Ship Date` <- as.numeric(small$`Ship Date`)
+small$`Diff Date` <- as.numeric(small$`Diff Date`)
+```
+
+### Differences Between Small & Large Data Sets
+
+From observing the two data sets, it doesn't appear the larger set has any categories that the smaller does not have. Nor, does the quartiles seem to change very much for the continuous variables, either. Again, neither set has any missing values.
+
+
+#### Small Data Set Summary - 1,000 Rows
+```{r}
+summary(small)
+```
+
+#### Larget Data Set Summary - 10,0000 Rows
+
+```{r}
+summary(large)
+```
+
+```{r date_time_normalization_large, echo=TRUE, warning=FALSE, message=FALSE}
+# choose an epoch date from the earliest date time
+start_date <- as.Date(min(large$`Order Date`), "%d/%m/%Y")
+
+# Convert the incoming dates to DateTime objects
+large$`Order Date` <- mdy(large$`Order Date`)
+large$`Ship Date` <- mdy(large$`Ship Date`)
+
+# Normalize from the epoch date
+large$`Ship Date` <- difftime(large$`Ship Date`, start_date, units = "days")
+large$`Order Date` <- difftime(large$`Order Date`, start_date, units = "days")
+
+# Add new feature: dates between order and ship
+large$`Diff Date` <- large$`Ship Date` - large$`Order Date`
+
+# Cast the dates as numerics
+large$`Order Date` <- as.numeric(large$`Order Date`)
+large$`Ship Date` <- as.numeric(large$`Ship Date`)
+large$`Diff Date` <- as.numeric(large$`Diff Date`)
+summary(small)
+```
+
+
+
+
+#### Sampling
+
+For training and test sets, we simply use 75% for training and 25% for testing.
+
+```{r sample, echo=TRUE, warning=FALSE, message=FALSE}
+set.seed(12341)
+sample_set <- sample(nrow(small), round(nrow(small)*0.75), replace=FALSE)
+small_train <- small[sample_set,] 
+small_test <- small[-sample_set,] 
+
+sample_set <- sample(nrow(large), round(nrow(large)*0.75), replace=FALSE)
+large_train <- small[sample_set,] 
+large_test <- small[-sample_set,] 
+```
+
+
+### Choosing Two Machine Learning Algorithms
+
+After exploring the data, we can use two different algorithms to predict the sales channel:  Naive Bayes and k-nearest neighbors. Again, the sales data set has ten quantitative and five qualitative variables with no missing data. The qualitative variables are pretty well balanced in all cases. However the continuous variables are definitely collinear with outliers and non-normal distributions. But these characteristics fit the two algorithms:
+
+1. KNN - pro's
+  a. Makes no assumptions about continuous variable distributions
+  b. Requires no missing data
+  c. Qualitative variables should be balanced
+  d. Fast training
+2. KNN - cons's
+  a. Requires normalization to handle outliers
+  b. Classification is slow for larger data sets
+
+3. Naive Bayes - pro's
+  a. Fast classification performance
+  b. Natively processes categorical data very well
+  c. Handles noisy and missing data
+  
+4. Naive Bayes - con's
+  a. Does not work well with large numbers of continuous features
+  b. Assumes all features are independent and equally important
+
+
+
+### Balanced Classes
+
+Checking both the original and sample sets, similar ratios of online versus offline sales was maintained.
+
+Also, for the country category, all countries should be represented to avoid an error in the prediction ('cannot predict for rows with new country'). The code below specifically moves rows from the test set to the training set for new countries.
+
+Balancing countries for the smaller set
+```{r balance_countries_small, echo=TRUE, warning=FALSE, message=FALSE}
+small_train_country <- small_train %>% dplyr::select(Country)
+small_test_country <- small_test %>% dplyr::select(Country)
+
+# balance the countries, some appear a few times in one set.
+country_diff <- anti_join(small_test_country, small_train_country)
+
+# we have a data problem here. Some countries only have a count of 1. They should be moved to the training set and out of the test set
+
+country_count <- country_diff %>% group_by(Country) %>% summarise(total_count=n()) %>% arrange(total_count)
+
+single_country_names <- country_count %>% filter (total_count == 1) %>% dplyr::select(Country) %>% as.vector()
+
+# now move them to the training set
+small_test_single_countries <- small_test %>% filter(Country %in% single_country_names$Country)
+
+small_train <- rbind(small_train, small_test_single_countries)
+
+# remove them from the test set
+small_test <- small_test %>% dplyr::filter(!Country %in% single_country_names$Country)
+
+nrow(small_train)
+nrow(small_test)
+
+# now sample the other name
+multiple_country_names <- country_count %>% filter (total_count > 1) %>% dplyr::select(Country) %>% as.vector()
+
+# Loop through the test countries that have a count > 1
+for (country_name in multiple_country_names$Country) {
+  # find the rows in test dataframe with this country name
+  multiple_country_dataframe <- small_test %>% filter(Country == country_name)
+  
+  # sample one...
+  multiple_country <- multiple_country_dataframe[sample(nrow(multiple_country_dataframe),1),]
+  
+  # and move the one row to the training set
+  small_train <- rbind(small_train, multiple_country)
+  small_test <- small_test %>% dplyr::filter(`Order ID` != multiple_country$`Order ID`)
+
+  nrow(small_train)
+  nrow(small_test)
+}
+```
+
+
+
+Balancing countries for the large set:
+```{r balance_countries_large, echo=TRUE, warning=FALSE, message=FALSE}
+large_train_country <- large_train %>% dplyr::select(Country)
+large_test_country <- large_test %>% dplyr::select(Country)
+
+# balance the countries, some appear a few times in one set.
+country_diff <- anti_join(large_test_country, large_train_country)
+
+# we have a data problem here. Some countries only have a count of 1. They should be moved to the training set and out of the test set
+
+country_count <- country_diff %>% group_by(Country) %>% summarise(total_count=n()) %>% arrange(total_count)
+
+single_country_names <- country_count %>% filter (total_count == 1) %>% dplyr::select(Country) %>% as.vector()
+
+# now move them to the training set
+large_test_single_countries <- large_test %>% filter(Country %in% single_country_names$Country)
+
+large_train <- rbind(large_train, large_test_single_countries)
+
+# remove them from the test set
+large_test <- large_test %>% dplyr::filter(!Country %in% single_country_names$Country)
+
+nrow(large_train)
+nrow(large_test)
+
+# now sample the other name
+multiple_country_names <- country_count %>% filter (total_count > 1) %>% dplyr::select(Country) %>% as.vector()
+
+# Loop through the test countries that have a count > 1
+for (country_name in multiple_country_names$Country) {
+  # find the rows in test dataframe with this country name
+  multiple_country_dataframe <- large_test %>% filter(Country == country_name)
+  
+  # sample one...
+  multiple_country <- multiple_country_dataframe[sample(nrow(multiple_country_dataframe),1),]
+  
+  # and move the one row to the training set
+  large_train <- rbind(large_train, multiple_country)
+  large_test <- large_test %>% dplyr::filter(`Order ID` != multiple_country$`Order ID`)
+
+  nrow(large_train)
+  nrow(large_test)
+}
+```
+
+
+### Naive Bayes Model
+
+For the naive Bayes model, I found removing the Order ID and a few collinear variables resulted in a 57% accuracy rate (smaller set) or 50% (larger set).
+
+
+```{r naive_bayes, echo=TRUE, warning=FALSE, message=FALSE}
+
+small_train_nb <- small_train #
+small_test_nb <- small_test
+small_model_nb <- naiveBayes(`Sales Channel` ~ . -`Order ID`-`Ship Date`-`Unit Cost`-`Total Cost`, data=small_train_nb, laplace=1)
+small_predict_nb <- predict(small_model_nb, small_test_nb, type="class")
+small_table_nb <- table(small_test_nb$`Sales Channel`, small_predict_nb)
+paste("Naive Bayes, small data set accuracy: ", round(sum(diag(small_table_nb))/nrow(small_test_nb),2))
+#small_model_nb
+```
+
+```{r naive_bayes_large, echo=TRUE, warning=FALSE, message=FALSE}
+large_train_nb <- large_train #%>% dplyr::select(-c(`Unit Cost`,`Total Cost`,`Order ID`,`Ship Date`,`Diff Date`))
+large_test_nb <- large_test #%>% dplyr::select(-c(`Unit Cost`,`Total Cost`,`Order ID`,`Ship Date`,`Diff Date`))
+large_model_nb <- naiveBayes(`Sales Channel` ~ . -`Order ID`-`Ship Date`-`Unit Cost`-`Total Cost`, data=large_train_nb, laplace=1)
+large_predict_nb <- predict(large_model_nb, large_test_nb, type="class")
+large_table_nb <- table(large_test_nb$`Sales Channel`, large_predict_nb)
+sum(diag(large_table_nb))/nrow(large_test_nb)
+paste("Naive Bayes, large data set accuracy: ", round(sum(diag(large_table_nb))/nrow(large_test_nb),2))
+#large_model_nb
+```
+
+
+```{r, echo=TRUE, warning=FALSE, message=FALSE}
+normalize <- function(x) {
+  return ((x- min(x)) /( max(x) - min(x)))
+}
+```
+
+
+### K-Nearest Neighbor Model
+
+For the KNN model, all continuous variables need to be normalized so we use our custom function to mutate each feature. Additionally, we search for the ideal number of k (number of nearest neighbor) from a range of 1 to 10. The accuracy rate for the smaller set was 57% versus 49% for the larger set.
+
+```{r, echo=TRUE, warning=FALSE, message=FALSE}
+sales_labels <- small %>% dplyr::select(`Sales Channel`)
+small_dummies <- dummy_cols(small)
+small_dummies <- small_dummies %>%
+  mutate(
+    `Diff Date` = normalize(as.numeric(`Diff Date`)),
+    `Order Date` = normalize(as.numeric(`Order Date`)),
+    `Ship Date` = normalize(as.numeric(`Ship Date`)),
+    `Order ID` = normalize(as.numeric(`Order ID`)),
+    `Units Sold` = normalize(as.numeric(`Units Sold`)),
+    `Unit Price` = normalize(as.numeric(`Unit Price`)),
+    `Unit Cost` = normalize(as.numeric(`Unit Cost`)),
+    `Total Revenue` = normalize(as.numeric(`Total Revenue`)),
+    `Total Cost` = normalize(as.numeric(`Total Cost`)),
+    `Total Profit` = normalize(as.numeric(`Total Profit`))
+    )
+sample_dummies_index <- sample(nrow(small_dummies), round(nrow(small_dummies)*0.75), replace=FALSE)
+small_train <- small_dummies[sample_dummies_index,]  %>% dplyr::select(-c(Country, Region, `Item Type`,`Sales Channel`, `Sales Channel_Offline`, `Sales Channel_Online`, `Order Priority` ))
+small_test <- small_dummies[-sample_dummies_index,]  %>% dplyr::select(-c(Country, Region, `Item Type`,`Sales Channel`, `Sales Channel_Offline`, `Sales Channel_Online`, `Order Priority` ))
+small_train_labels <- sales_labels[sample_dummies_index,]
+small_test_labels <- sales_labels[-sample_dummies_index,]
+
+knn_accuracies <- c()
+best_neighbor <- 1
+max_accuracy <- 0
+neighbor_range <- 1:10
+for (neighbors in neighbor_range) {
+  small_knn_pred <- knn(train = small_train, test = small_test, cl = small_train_labels$`Sales Channel`, k=neighbors)
+  small_knn_pred_table <- table(small_test_labels$`Sales Channel`, small_knn_pred)
+  #knn_accuracy <- sum(diag(small_knn_pred_table))/sum(small_knn_pred_table)
+  knn_accuracy <- sum(diag(small_knn_pred_table))/nrow(small_test)
+  
+  if (max_accuracy < knn_accuracy) { 
+      max_accuracy <- knn_accuracy
+      best_neighbor <- neighbors
+  }
+  knn_accuracies <- append(knn_accuracies, knn_accuracy)
+}
+
+paste0("Best neighbor:",best_neighbor, ", Accuracy:", max_accuracy )
+plot(x=neighbor_range, y=knn_accuracies)
+```
+
+
+
+```{r, echo=TRUE, warning=FALSE, message=FALSE, eval=TRUE}
+sales_labels <- large %>% dplyr::select(`Sales Channel`)
+large_dummies <- dummy_cols(large)
+large_dummies <- large_dummies %>%
+  mutate(
+    `Diff Date` = normalize(as.numeric(`Diff Date`)),
+    `Order Date` = normalize(as.numeric(`Order Date`)),
+    `Ship Date` = normalize(as.numeric(`Ship Date`)),
+    `Order ID` = normalize(as.numeric(`Order ID`)),
+    `Units Sold` = normalize(as.numeric(`Units Sold`)),
+    `Unit Price` = normalize(as.numeric(`Unit Price`)),
+    `Unit Cost` = normalize(as.numeric(`Unit Cost`)),
+    `Total Revenue` = normalize(as.numeric(`Total Revenue`)),
+    `Total Cost` = normalize(as.numeric(`Total Cost`)),
+    `Total Profit` = normalize(as.numeric(`Total Profit`))
+    )
+sample_dummies_index <- sample(nrow(large_dummies), round(nrow(large_dummies)*0.75), replace=FALSE)
+large_train <- large_dummies[sample_dummies_index,]  %>% dplyr::select(-c(Country, Region, `Item Type`,`Sales Channel`, `Sales Channel_Offline`, `Sales Channel_Online`, `Order Priority` ))
+large_test <- large_dummies[-sample_dummies_index,]  %>% dplyr::select(-c(Country, Region, `Item Type`,`Sales Channel`, `Sales Channel_Offline`, `Sales Channel_Online`, `Order Priority` ))
+large_train_labels <- sales_labels[sample_dummies_index,]
+large_test_labels <- sales_labels[-sample_dummies_index,]
+
+knn_accuracies <- c()
+best_neighbor <- 1
+max_accuracy <- 0
+neighbor_range <- 1:10
+for (neighbors in neighbor_range) {
+  large_knn_pred <- knn(train = large_train, test = large_test, cl = large_train_labels$`Sales Channel`, k=neighbors)
+  large_knn_pred_table <- table(large_test_labels$`Sales Channel`, large_knn_pred)
+  #knn_accuracy <- sum(diag(large_knn_pred_table))/sum(large_knn_pred_table)
+  knn_accuracy <- sum(diag(large_knn_pred_table))/nrow(large_test)
+  
+  if (max_accuracy < knn_accuracy) { 
+      max_accuracy <- knn_accuracy
+      best_neighbor <- neighbors
+  }
+  knn_accuracies <- append(knn_accuracies, knn_accuracy)
+}
+
+paste0("Best neighbor:",best_neighbor, ", Accuracy:", max_accuracy )
+plot(x=neighbor_range, y=knn_accuracies)
+```
