@@ -1,0 +1,351 @@
+---
+title: "Predicting Diabetes with Decision Trees and Random Forests"
+author: "Cliff Lee"
+date: "2023-10-17"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r load_libraries, echo=FALSE, warning=FALSE, message=FALSE}
+library(tidyverse)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+library(datasets)
+library(caret)
+library(e1071)
+library(pROC)
+library(performanceEstimation)
+library(ggplot2)
+library(GGally)
+```
+
+### Abstract
+
+In the article, "The GOOD, The BAD & The UGLY of Using Decision Trees" ([3]), the author gives an overview of decision trees; how they are an easily understood tool for strategic thinking and decision making. However, the downsides of decision trees include:
+
+ * Repeating logic in multiple nodes - if one repeating logic is changed, it has to be changed everywhere else too
+ * Some trees can be too complicated with too many levels
+ * Sensitive to data - little changes to data can change the tree a lot
+
+To study decision trees and random forest models, I chose a diabetes dataset from Kaggle ([1]). It has several continuous health related independent variables. The dependent, categorical variable is 'outcome' which indicates whether a given patient has diabetes. After balancing the classes with respect to the outcome variable, I created two decision trees using different predictors; they both had accuracy rates in the mid 70% range; I later "pruned" ([2])the trees to improve the visualization. On the other hand, a random forest mode's accuracy was in 90% range.
+
+Even though, the random forest model had a higher accuracy it was not as accessible. There is no visualization graph that explains how the model works as it's blackbox of ensemble learners. We can only visualize its accuracy as it builds more decision trees. However, because it's composed of many trees, random forests are more resilient to data changes.
+
+
+References:
+
+ [1] https://www.kaggle.com/datasets/willianoliveiragibin/diabetesdataanslysis \
+ [2] https://dzone.com/articles/decision-trees-and-pruning-in-r \
+ [3] https://decizone.com/blog/the-good-the-bad-the-ugly-of-using-decision-trees \
+
+
+### Exploratory Data Analysis
+
+The data set has eight continuous variables and one categorical dependent variable (outcome). From the summary output, we see there is no missing data and the diabetes pedigree function (DPF) feature appears to be normalized. 
+
+
+```{r load_data, echo=FALSE, warning=FALSE, message=FALSE}
+data <- read_csv('diabetes.csv', col_types="nnnnnnnnf")
+summary(data)
+```
+The outcome feature is imbalanced (268 versus 500) so we'll have to resample the classes to balance the classes before training.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+summary(data$Outcome)
+```
+
+# Continous variable distributions
+
+Next, the below pair plots show that most of the distributions are normal or right skewed. Also, most of the variables are not correlated except for age and pregnancies. This is not too surprising as older patients would have more oppurtunities for pregnancies. Lastly, the scatter plots further display the weak correlations between variables and many minimum values for blood pressure, DPF, insulin, pregnancies and skin thickness (explaining their skewness).
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE, out.width="90%"}
+#numeric_data <- data %>% dplyr::select(where(is.numeric))
+ggpairs(data) 
+```
+
+
+The various box plots show their variation in relation to the outcome values. Blood pressure has almost identical plots so it may not be a good predictor (and not part of the decision tree). Skin thickness and BMI haave similar quartile sizes but their medians differ; these may not be the strongest predictors. All other independent variables have different outliers and quartiles so they have a good chance of being in the decision trees.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+featurePlot(data %>% dplyr::select(Glucose,BloodPressure),data$Outcome,"box",labels=c("Outcome",""))
+```
+
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+featurePlot(data %>% dplyr::select(Insulin),data$Outcome,"box",labels=c("Outcome",""))
+```
+
+
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+featurePlot(data %>% dplyr::select(SkinThickness,BMI,Age), data$Outcome,"box",labels=c("Outcome",""))
+```
+
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+featurePlot(data %>% dplyr::select(Pregnancies), data$Outcome,"box",labels=c("Outcome",""))
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+featurePlot(data %>% dplyr::select(DiabetesPedigreeFunction), data$Outcome,"box",labels=c("Outcome",""))
+```
+
+
+
+### Balancing The Outcome Variable
+
+As noted, we have to balance the data set with respect to the outcome variable using the SMOTE function. We end up with an even split for our category.
+
+```{r smote, echo=TRUE, warning=FALSE, message=FALSE}
+data <- smote(Outcome ~ ., data, perc.over = 1.5, perc.under = 2.0)
+
+summary(data$Outcome)
+```
+
+```{r sample, echo=TRUE, warning=FALSE, message=FALSE}
+set.seed(1234)
+
+sample_set <- sample(nrow(data), round(nrow(data)*0.80), replace = FALSE)
+
+data_train <- data[sample_set,]
+data_test <- data[-sample_set,]
+```
+
+
+
+### Training Tree 1
+
+To break up the predictors, we'll randomly select the following features: diabetes pedigree function; BMI; skin thickness. Note, when creating the model, no limit on the depth or nodes is specified so the tree can have many levels. Decision tree #1's accuracy is 83% which gives us an idea about how it'll perform with the test data (namely, the test will probably have a lower accuracy).
+
+```{r tree_1_train, echo=TRUE, warning=FALSE, message=FALSE}
+diabetes_model_1 <- rpart(Outcome ~Age+DiabetesPedigreeFunction+BMI+SkinThickness, 
+                          method="class", 
+                          data = data_train,
+                          control = rpart.control(cp = 0)
+                          )
+
+diabetes_pred <- predict(diabetes_model_1, data_train, type="class")
+c <- confusionMatrix(diabetes_pred, data_train$Outcome)
+c$overall[1]
+c$table
+```
+
+
+### Testing Tree 1
+
+Using the trained model, we can test it against the test data set.
+
+```{r tree_1_test, echo=TRUE, warning=FALSE, message=FALSE}
+diabetes_pred_1 <- predict(diabetes_model_1, data_test, type="class")
+c <- confusionMatrix(diabetes_pred_1, data_test$Outcome)
+paste0("Decision Tree 1")
+c$overall[[1]]
+diabetes_pred_1_accuracy <- round(c$overall[[1]],2)
+c$table
+```
+Decision Tree #1's accuracy fell to `r paste0(diabetes_pred_1_accuracy*100, "%")` with the test data.  Looking at the resulting decision tree, we can say it's a bit daunting and shows a tree with too many levels Even though it's difficult to see, some of the branches have repeating logic also.
+
+
+### Training Decision Tree # 2
+
+Using the unused features, we'll train decision tree #2 with: pregnancies; glucose; blood pressure; insulin. 
+
+```{r basic_decision_subtree_2, echo=TRUE, warning=FALSE, message=FALSE}
+diabetes_model_2 <- rpart(Outcome ~Pregnancies+Glucose+BloodPressure+Insulin, 
+                          method="class", 
+                          data = data_train,
+                          control = rpart.control(cp = 0)
+                          )
+
+diabetes_pred_2 <- predict(diabetes_model_2, data_test, type="class")
+c <- confusionMatrix(diabetes_pred_2, data_test$Outcome)
+paste0("Decision Tree 2")
+c$overall[1]
+c$table
+diabetes_pred_2_accuracy <- round(c$overall[[1]],2)
+
+```
+
+This decision tree performs slightly worse with `r paste0(diabetes_pred_2_accuracy*100, "%")` with ten levels. This tree has the same negatives of decision tree #1.
+
+
+```{r tree_2_print, echo=FALSE, warning=FALSE, message=FALSE}
+rpart.plot(diabetes_model_2)
+```
+
+
+### Addressing the Disadvantages of Decision Trees
+
+The decision trees have decent accuracy rates, however they suffer from unavoidable disadvantages. First, they have many levels (more than a dozen), and can be hard or unwieldy to use. Also, due to its large size, there are probably repeating decision nodes; if one needs adjustment, there are multiple places to do so. Lastly, one can guess these decision trees are overfitted and sensitive to the data. If any previously unforeseen data appears, the decision trees may not predict properly.
+
+To combat this issues, we can prune both decision trees by removing levels.  For decision tree #1, we'll prune the tree back and remove levels. For the second tree, we'll retrain the model but add a max depth parameter to control its growth.
+
+
+### Post-pruning Decision Tree #1
+
+We'll use the plotcp & printcp functions to see how the relative errors progress as more levels are added. When the error comes close to 0.6, the tree can be stopped. In this case, that happens when the complexity parameter is 0.0330189.
+
+We'll apply this parameter to the previous model and end up with a simpler decision tree.
+
+At the end, the accuracy definitely drops but we end up with a much more understandable tree.
+
+
+### Finding an ideal cost parameter (cp)
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+plotcp(diabetes_model_1)
+```
+
+We see the cost parameter (bottom axis) coming close to the relative error level of below 0.6.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+printcp(diabetes_model_1)
+```
+
+### Post prune Decision Tree #1
+
+At the end, the accuracy doesn't drop very much and we end up with a much more digestable tree.
+
+
+```{r, echo=TRUE, warning=FALSE, message=FALSE}
+diabetes_model_1_pruned <- prune(diabetes_model_1, cp = 0.0330189 )
+
+diabetes_pred_1 <- predict(diabetes_model_1_pruned, data_test, type="class")
+c <- confusionMatrix(diabetes_pred_1, data_test$Outcome)
+c$overall[1]
+c$table
+diabetes_prune_1_accuracy <- round(c$overall[[1]], 2)
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+rpart.plot(diabetes_model_1_pruned)
+```
+
+
+
+
+### Post Pruning Decision Tree #2 
+
+For the second tree, we'll observe the cost parameter plot and see what the max depth should be. The diagram shows a depth of 3 is where the relative error levels off.
+
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+plotcp(diabetes_model_2)
+```
+
+
+We'll recreate the second tree and specify the **maxdepth to equal 3**.
+
+```{r basic_decision_subtree_2b, echo=TRUE, warning=FALSE, message=FALSE}
+diabetes_model_2 <- rpart(Outcome ~Pregnancies+Glucose+BloodPressure+Insulin, 
+                          method="class", 
+                          data = data_train,
+                          control = rpart.control(cp = 0, maxdepth=3)
+                          )
+
+diabetes_pred_2 <- predict(diabetes_model_2, data_test, type="class")
+c <- confusionMatrix(diabetes_pred_2, data_test$Outcome)
+paste0("Decision Tree 2")
+c$overall[1]
+c$table
+diabetes_prune_2_accuracy <- round(c$overall[[1]], 2)
+```
+
+Rebuilding the second model and a max depth of 3 results in an accuracy of `r paste0(diabetes_prune_2_accuracy*100, "%")`  with the below tree. Again, the accuracy loss is relatively low compared to the improvement in the decision tree.
+
+
+```{r,echo=FALSE, warning=FALSE, message=FALSE}
+rpart.plot(diabetes_model_2)
+```
+
+### Random Forest Model
+
+The last model we'll build is a random forest. Using default values, the random forest model has a 90% accuracy rate with 500 sub trees. Notice, we cannot improve the sub trees or even print them. It doesn't make sense in this case as random forests are ensemble learners and no single tree dominates. Instead, each tree has random predictors and their scores are weighted so only the whole is important.
+
+
+```{r random_forest, echo=FALSE, warning=FALSE, message=FALSE}
+rf <- randomForest(Outcome~., data=data_train)
+random_forest_pred <- predict(rf, data_test,type="class")
+c <- confusionMatrix(random_forest_pred, data_test$Outcome)
+c$overall[1]
+c$table
+diabetes_rf_accuracy <- round(c$overall[[1]], 2)
+
+```
+```{r}
+rf
+```
+
+
+### Comparing Accuracy Rates
+
+To help compare their performances, we can look at a chart of the random forest versus the first two decision trees. Even though the basic decision trees perform worse, the random forest uses these simpler trees to build a better model.
+
+
+
+```{r, echo=FALSE}
+accuracies <- data.frame( Models = c("Decision Tree #1", 
+                                     "Pruned Decision Tree #1", 
+                                     "Decision Tree #2", 
+                                     "Pruned Decision Tree #2", 
+                                     "Random Forest"
+                                     ),
+                          Accuracy = c(diabetes_pred_1_accuracy,
+                                       diabetes_pred_2_accuracy,
+                                       diabetes_prune_1_accuracy,
+                                       diabetes_prune_2_accuracy,
+                                       diabetes_rf_accuracy
+                                       )
+                        )
+
+print(accuracies)
+```
+
+
+### ROC Curves for the Decision Trees and Random Forest Model
+
+
+```{r roc, echo=FALSE, warning=FALSE, message=FALSE}
+roc_df <- tibble(
+  dt1=diabetes_pred_1 %>% ordered(),
+  dt2=diabetes_pred_2 %>% ordered(),
+  rf=random_forest_pred %>% ordered(),
+  response=data_test$Outcome
+)  
+
+roc.list <- roc(response ~ dt1 + dt2 + rf, data = roc_df)  
+
+roc_values <- 
+  lapply(roc.list,"auc") %>% 
+  as.numeric() %>% 
+  round(2)
+
+ggroc(roc.list) + 
+  geom_line(linewidth=2)+
+  geom_abline(slope=1, 
+              intercept = 1, 
+              linetype = "dashed", 
+              alpha=0.5,
+              linewidth=2,
+              color = "grey") + 
+  scale_color_brewer(palette = "Set2",
+                     labels=c(
+                       paste0("Decision Tree 1: ", roc_values[1]),
+                       paste0("Decision Tree 2: ", roc_values[2]),
+                       paste0("Random Forest: ",roc_values[3]))) +
+  guides(color= guide_legend(title = "Model AUC Scores")) +
+  theme_minimal() +
+  coord_equal()
+
+```
+
+### Last Remarks
+
+Again, when using individual trees, we can inspect their internal logic structure and understand where their weakpoints are. We can also grasp how the training data would directly affect their node structure, also. And we can limit how many levels are in a tree to simplify them with as long as the sacrifice in accuracy is acceptable.
+
+On the other hand, we see how an ensembler learner like a random forest model that uses multiple simple trees can take subsets of predictors and trees and producer a model with a higher accuracy. However, we no longer have access to its internal logic and any attempts to audit or confirm its operation will not be easy.
+
