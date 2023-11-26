@@ -105,24 +105,24 @@ paste0("The root mean square error for predicted pregnancies is: " , round(rmse_
 
 
 ```{r, warning=FALSE, message=FALSE}
-svm_linear <- svm(Outcome ~., data=data_train, kernel="linear", cost=120)
+svm_linear <- svm(Outcome ~., data=data_train, kernel="linear", cost=5)
 r <- predict(svm_linear, data_test)
 c <- confusionMatrix(r, data_test$Outcome)
 c$overall[[1]]
 
 
-svm_poly <- svm(Outcome ~., data=data_train, kernel="polynomial", coef=1, gama=1, cost=120)
+svm_poly <- svm(Outcome ~., data=data_train, kernel="polynomial", coef=1, gamma=1, cost=5)
 r <- predict(svm_poly, data_test)
 c <- confusionMatrix(r, data_test$Outcome)
 c$overall[[1]]
 
 
-svm_radial <- svm(Outcome ~., data=data_train, kernel="radial", gama=1, cost=120)
+svm_radial <- svm(Outcome ~., data=data_train, kernel="radial", gamma=1, cost=5)
 r <- predict(svm_radial, data_test)
 c <- confusionMatrix(r, data_test$Outcome)
 c$overall[[1]]
 
-svm_sigmoid <- svm(Outcome ~., data=data_train, kernel="sigmoid", gama=1, cost=120)
+svm_sigmoid <- svm(Outcome ~., data=data_train, kernel="sigmoid", gama=1, cost=5)
 r <- predict(svm_sigmoid, data_test)
 c <- confusionMatrix(r, data_test$Outcome)
 c$overall[[1]]
@@ -167,253 +167,13 @@ c$overall[[1]]
 
 ```
 
-
-
-### SVM 1 – Tuning Penalty Function
-```{r, warning=FALSE, message=FALSE}
-# Reference - https://fahadtaimur.wordpress.com/2020/07/19/tuning-svm-in-r-2/
-
-# Define the tuning specification
-tuning_specs <- svm_poly(
-  cost = tune(), degree = 1
-) %>%
-  set_mode("classification") %>%
-  set_engine("kernlab"); tuning_specs
-
-# Define a grid to vary cost
-svm_grid <- expand.grid(cost = c(1, 5, 10, 15, 50, 100, 120, 150)); svm_grid
-
-
-# Perform cv splits on training data
-cv_folds <- vfold_cv(data = data_train, v = 5); cv_folds
-
-
-# Workflow for tuning
-svm_wf <- workflow() %>%
-  # add the tuning specificiatons
-  add_model(tuning_specs) %>%
-  # add the prediction formula
-  add_formula(Outcome ~ .)
-
-
-# Tuning is faster in parallel
-all_cores <- parallel::detectCores(logical = FALSE)
-cl <- makeCluster(all_cores)
-registerDoParallel(cl)
-
-
-# Start Tuning
-svm_results <-  svm_wf %>% 
-  tune_grid(resamples = cv_folds,
-            grid = svm_grid)
-
-
-# Collect the results
-svm_results %>% 
-  collect_metrics() %>%
-  arrange(desc(mean))
-
-```
-
-## SVM 1 – Tuning Penalty Function – Visual Analysis
-
 ```{r}
+pred_val <-prediction(pred[,2], data_test$diabetic)
+perf_val <- performance(pred_val,"auc")
+perf_val <- performance(pred_val, "tpr", "fpr")
 
-svm_results %>%
-  collect_metrics() %>%
-  filter(.metric == "accuracy") %>%
-  mutate(cost = factor(cost)) %>%
-  ggplot(aes(cost, mean, color = cost)) +
-  geom_point() +
-  labs(y = "Accuracy") +
-  tidyquant::theme_tq()
-
-```
-```{r}
-svm_results %>%
-  collect_metrics() %>%
-  filter(.metric == "roc_auc") %>%
-  mutate(cost = factor(cost)) %>%
-  ggplot(aes(cost, mean, color = cost)) +
-  geom_point() +
-  labs(y = "AUC") +
-  tidyquant::theme_tq()
-```
-## SVM 1 – Tuning Penalty Function – Finalize
-
-```{r}
-# select the best parameter based on auc
-svm_results %>%
-  select_best(metric = "accuracy") -> svm_final; svm_final
-
-# fit to the train
-svm_wf %>%
-  finalize_workflow(svm_final) %>%
-  fit(data=data_train) -> svm_model
-
-```
-
-## SVM 1 – Tuning Penalty Function – Evaluate
-
-```{r}
- # -- training  
-predict(svm_model, data_train, type="prob") %>%
-    bind_cols(predict(svm_model, data_train, type="class")) %>%
-    bind_cols(.,data_train)-> scored_train 
-
-# -- testing 
-predict(svm_model, data_test, type="prob") %>%
-      bind_cols(predict(svm_model, data_test, type="class")) %>%
-      bind_cols(., data_test) -> scored_test   
-
-# -- AUC: Train and Test 
-scored_train %>% 
-    metrics(Outcome, .pred_1, estimate = .pred_class) %>%
-    mutate(part="training") %>%
-    bind_rows(scored_test %>% 
-                 metrics(Outcome, .pred_1, estimate = .pred_class) %>%
-                 mutate(part="testing") 
-    ) %>%
-    filter(.metric %in% c("accuracy", "roc_auc")) %>%
-    print()
-
-  # -- ROC Charts 
-scored_train %>%
-  mutate(model = "train") %>%
-  bind_rows(scored_test %>%
-              mutate(model="test")) %>%
-  group_by(model) %>%
-  roc_curve(Outcome, .pred_1) %>%
-  autoplot() %>%
-    print()
-
-```
-
-
-
-### SVM 3 – Radial Basis Tuning
-
-
-```{r, warning=FALSE, message=FALSE}
-
-# Define the tuning specification
-tuning_specs <- svm_rbf(cost = 120, rbf_sigma = tune()) %>%
-  set_mode("classification") %>%
-  set_engine("kernlab"); tuning_specs
-
-
-## Computational engine: kernlab
-# Define a grid to vary cost
-svm_grid <- expand.grid(rbf_sigma = c(0.1, 1, 2, 3)); svm_grid
-
-# Perform cv splits on training data
-cv_folds <- vfold_cv(data = data_train, v = 5); cv_folds
-
-# Workflow for tuning
-svm_wf <- workflow() %>%
-  # add the tuning specificiatons
-  add_model(tuning_specs) %>%
-  # add the prediction formula
-  add_formula(Outcome ~ .)
-
-
-# Tuning is faster in parallel
-all_cores <- parallel::detectCores(logical = FALSE)
-cl <- makeCluster(all_cores)
-registerDoParallel(cl)
-
-# Start Tuning
-svm_results <-  svm_wf %>% 
-  tune_grid(resamples = cv_folds,
-            grid = svm_grid)
-
-# Collect the results
-svm_results %>% 
-  collect_metrics() %>%
-  arrange(desc(mean))
-
-```
-### SVM 3 – Radial Basis Function Tuning – Visual Analysis
-
-```{r}
-
-svm_results %>%
-  collect_metrics() %>%
-  filter(.metric == "accuracy") %>%
-  mutate(rbf_sigma = factor(rbf_sigma)) %>%
-  ggplot(aes(rbf_sigma, mean, color = rbf_sigma)) +
-  geom_point() +
-  labs(y = "Accuracy") +
-  tidyquant::theme_tq()
-
-
-```
-
-### SVM 3 – Radial Basis Function Tuning – Visual Analysis
-
-
-```{r}
-svm_results %>%
-  collect_metrics() %>%
-  filter(.metric == "roc_auc") %>%
-  mutate(rbf_sigma = factor(rbf_sigma)) %>%
-  mutate(rbf_sigma = factor(rbf_sigma)) %>%
-  ggplot(aes(rbf_sigma, mean, color = rbf_sigma)) +
-  geom_point() +
-  labs(y = "AUC") +
-  tidyquant::theme_tq()
-```
-
-
-### SVM 3 – Radial Basis Function Tuning – Finalize
-
-```{r}
-# select the best parameter based on auc
-svm_results %>%
-  select_best(metric = "accuracy") -> svm_final; svm_final
-
-# fit to the train
-svm_wf %>%
-  finalize_workflow(svm_final) %>%
-  fit(data=data_train) -> svm_model
-
-
-```
-
-###SVM 3 – Radial Basis Function – Evaluate
-
-
-```{r}
-# predict on train  
-predict(svm_model, data_train, type="prob") %>%
-    bind_cols(predict(svm_model, data_train, type="class")) %>%
-    bind_cols(.,data_train)-> scored_train 
-
-# predict on test 
-predict(svm_model, data_test, type="prob") %>%
-      bind_cols(predict(svm_model, data_test, type="class")) %>%
-      bind_cols(., data_test) -> scored_test   
-
-# compare train and test auc and accuracy
-scored_train %>% 
-    metrics(Outcome, .pred_1, estimate = .pred_class) %>%
-    mutate(part="training") %>%
-    bind_rows(scored_test %>% 
-                 metrics(Outcome, .pred_1, estimate = .pred_class) %>%
-                 mutate(part="testing") 
-    ) %>%
-    filter(.metric %in% c("accuracy", "roc_auc")) %>%
-    print()
-
-# roc curves
-scored_train %>%
-  mutate(model = "train") %>%
-  bind_rows(scored_test %>%
-              mutate(model="test")) %>%
-  group_by(model) %>%
-  roc_curve(Outcome, .pred_1) %>%
-  autoplot() %>%
-    print()
+# Plot the ROC curve
+plot(perf_val, col = "green", lwd = 1.5)
 
 ```
 
