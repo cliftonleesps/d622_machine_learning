@@ -26,12 +26,13 @@ library(kernlab)
 library(tidymodels)
 library(doParallel)
 library(Metrics)
+library(ROCR)
 
 
 ```
 
 
-```{r}
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
 min_max_norm <- function(x) {
     (x - min(x)) / (max(x) - min(x))
   }
@@ -43,19 +44,14 @@ min_max_norm <- function(x) {
 ```{r, warning=FALSE, message=FALSE}
 data <- read_csv('diabetes.csv', col_types="nnnnnnnnf")
 data <- smote(Outcome ~ ., data, perc.over = 1.5, perc.under = 2.0)
-
+data_2 <- as.data.frame(lapply(data[1:8], min_max_norm))
+data <- cbind(data_2, data$`Outcome`)
+colnames(data) <- c(colnames(data_2), 'Outcome')
 ```
 
 ### normalize
-```{r}
-data_2 <- as.data.frame(lapply(data[1:8], min_max_norm))
-data <- cbind(data_2, data$`Outcome`)
-
-colnames(data) <- c(colnames(data_2), 'Outcome')
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
 summary(data)
-
-
-
 ```
 ```{r, echo=FALSE, warning=FALSE, message=FALSE, out.width="90%"}
 #numeric_data <- data %>% dplyr::select(where(is.numeric))
@@ -72,7 +68,11 @@ data_train <- data[sample_set,]
 data_test <- data[-sample_set,]
 ```
 
+## Overlap
 
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+plot(x=data_test$BMI, y=data_test$Pregnancies, col=data_test$Outcome, pch=19, cex=1.5)
+```
 
 
 ## Regression
@@ -81,12 +81,15 @@ data_test <- data[-sample_set,]
 # REference: https://www.kdnuggets.com/2017/03/building-regression-models-support-vector-regression.html
 modelsvm <- svm(Pregnancies ~ Age, data_train)
 predict_pregnancies <- predict(modelsvm, data_test)
-p <- plot(x=data_test$Age, y=data_test$Pregnancies)
+p <- plot(x=data_test$Age, y=data_test$Pregnancies, main="SVM Regression Example #1",
+          xlab="Scaled Age", ylab="Scaled Pregnancies")
 points(data_test$Age, predict_pregnancies, col='red', pch=16)
+legend("topright",legend=c("Regression", "Datapoint"),
+       col=c("red", "black"), pch = c(16,1), bty="n")
 ```
 
 
-```{r}
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
 rmse_pregnancies <- rmse(data_test$Pregnancies, predict_pregnancies)
 paste0("The root mean square error for predicted pregnancies is: " , round(rmse_pregnancies * 100,0), "%.")
 ```
@@ -94,11 +97,16 @@ paste0("The root mean square error for predicted pregnancies is: " , round(rmse_
 ```{r}
 modelsvm <- svm(BloodPressure ~ SkinThickness, data_train)
 predict_BloodPressure <- predict(modelsvm, data_test)
-plot(x=data_test$SkinThickness, y=data_test$BloodPressure)
+plot(x=data_test$SkinThickness, y=data_test$BloodPressure,
+     main="SVM Regression Example #2",
+          xlab="Scaled Skin Thickness", ylab="Scaled Blood Pressure")
 points(data_test$SkinThickness, predict_BloodPressure, col='red', pch=16)
+legend("bottomright",legend=c("Regression", "Datapoint"),
+       col=c("red", "black"), pch = c(16,1), bty="n")
+
 ```
 
-```{r}
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
 rmse_BloodPressure <- rmse(data_test$BloodPressure, predict_BloodPressure)
 paste0("The root mean square error for predicted pregnancies is: " , round(rmse_BloodPressure * 100,0), "%.")
 ```
@@ -122,33 +130,33 @@ r <- predict(svm_radial, data_test)
 c <- confusionMatrix(r, data_test$Outcome)
 c$overall[[1]]
 
-svm_sigmoid <- svm(Outcome ~., data=data_train, kernel="sigmoid", gama=1, cost=5)
+svm_sigmoid <- svm(Outcome ~., data=data_train, kernel="sigmoid", gamma=1, cost=5)
 r <- predict(svm_sigmoid, data_test)
 c <- confusionMatrix(r, data_test$Outcome)
 c$overall[[1]]
 
 ```
 
-```{r}
+```{r, warning=FALSE, message=FALSE}
 
 # We'll mutate the data_test & data_train to work with the train function
-data_test <- data_test %>% mutate(diabetic = as.factor(ifelse(Outcome == 0, 'No','Yes')))
-data_train <- data_train %>% mutate(diabetic = as.factor(ifelse(Outcome == 0, 'No','Yes')))
+data_test <- data_test %>% mutate(Outcome = as.factor(ifelse(Outcome == 0, 'No','Yes')))
+data_train <- data_train %>% mutate(Outcome = as.factor(ifelse(Outcome == 0, 'No','Yes')))
 
-ctrl <- trainControl(method="cv",
-                     number = 2,
+ctrl <- trainControl(method="repeatedcv",
+                     number = 5,
                      summaryFunction=twoClassSummary,
                      classProbs=TRUE)
 
 # Grid search to fine tune SVM
 grid <- expand.grid(sigma = c(.01, .015, 0.2, 1, 2, 2.5, 3, 4, 5, 10),
-                    C = c(0.75, 0.9, 1, 1.1, 1.25, 5, 8, 10)
-)
+                    C = c(0.75, 0.9, 1, 1.1, 1.25, 5, 5.5, 6, 8, 10))
 
 svm.tune <- train(x=data_train[,1:8],
-                  y= data_train$diabetic,
+                  y= data_train$Outcome,
                   method = "svmRadial",
                   metric="ROC",
+                  preProc=c("center"),
                   tuneGrid = grid,
                   trControl=ctrl)
 
@@ -160,20 +168,20 @@ svm.tune$bestTune
 
 pred <- predict(svm.tune, data_test[,1:8], type="prob")
 p <- ifelse(pred$No > 0.5, 'No', 'Yes')
-c <- confusionMatrix(data_test$diabetic, as.factor(p))
+c <- confusionMatrix(data_test$Outcome, as.factor(p))
 
 c[[2]]
 c$overall[[1]]
 
 ```
 
-```{r}
-pred_val <-prediction(pred[,2], data_test$diabetic)
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+pred_val <-prediction(pred[,2], data_test$Outcome)
 perf_val <- performance(pred_val,"auc")
 perf_val <- performance(pred_val, "tpr", "fpr")
 
 # Plot the ROC curve
-plot(perf_val, col = "green", lwd = 1.5)
-
+plot(perf_val, col = "green", lwd = 1.5, main="ROC for Radial Kernel SVM")
+abline(coef = c(0,1), col="blue", lty=2)
 ```
 
