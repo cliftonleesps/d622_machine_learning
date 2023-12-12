@@ -1,0 +1,194 @@
+---
+title: "How Walkable Is Your Block?"
+author: "Cliff Lee"
+date: "2023-12-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+library(datasets)
+library(caret)
+library(e1071)
+library(kernlab)
+library(pROC)
+library(performanceEstimation)
+library(ggplot2)
+library(GGally)
+library(kernlab)
+library(tidymodels)
+library(doParallel)
+library(Metrics)
+library(ROCR)
+library(pls)
+
+```
+
+```{r warning=FALSE,include=FALSE, echo=FALSE}
+#data <- read_csv("EPA_SmartLocationDatabase_V3_Jan_2021_Final.csv", show_col_types = FALSE)
+data <- read_csv("test.csv", show_col_types = FALSE)
+
+
+#summary(data)
+```
+
+
+```{r warning=FALSE,include=FALSE, echo=FALSE}
+#colnames(data_train)
+
+data$CSA_Name <- as.factor(data$CSA_Name)
+data$CBSA_Name <- as.factor(data$CBSA_Name)
+
+# Exclude any row with NA's
+data <- data[complete.cases(data),]
+
+```
+
+```{r warning=FALSE,include=FALSE, echo=FALSE}
+set.seed(34583)
+
+sample_set <- sample(nrow(data), round(nrow(data)*0.80), replace = FALSE)
+
+data_train <- data[sample_set,]
+data_test <- data[-sample_set,]
+
+
+```
+
+```{r warning=FALSE,include=FALSE, echo=FALSE}
+
+#data_train <- data_train %>% select(!contains("_Name"))
+#data_train <- data_train[81:115]
+
+#data_test <- data_test %>% select(!contains("_Name"))
+#data_test <- data_test[81:115]
+```
+
+```{r warning=FALSE,include=FALSE, echo=FALSE, eval = FALSE}
+# Tuning is faster in parallel
+all_cores <- parallel::detectCores(logical = FALSE)
+cl <- makeCluster(all_cores)
+registerDoParallel(cl)
+```
+
+
+### SVM with Radial Kernel
+```{r include=FALSE, echo=FALSE, eval = FALSE}
+
+
+ctrl <- trainControl(method="repeatedcv",
+                     number = 10                          # 5 folds
+                     )
+
+grid <- expand.grid(sigma = 1e-04,                        #sigma = 1e-08 * 10^(seq(0,6,1)),
+                    C = seq(10, 1000,by=5)
+                    )
+
+
+#train_control <- trainControl(method="repeatedcv", number=10, repeats=3)
+start_time <- Sys.time()
+svm.tune <- train(NatWalkInd ~., 
+                  data=data_train %>% select(-c(CBSA_Name, CSA_Name, STATEFP, D1_FLAG)),
+                  method = "svmRadial",
+                  preProc=c("center", "scale"),
+                  metric="RMSE",
+                  tuneGrid = grid,
+                  trControl=ctrl)
+end_time <- Sys.time()
+
+print(end_time - start_time)
+```
+
+
+
+```{r,eval = FALSE}
+#svm.tune
+#print(svm.tune$bestTune)
+```
+
+
+
+
+
+
+
+```{r warning=FALSE,include=FALSE, echo=TRUE, eval=FALSE}
+#predict_walk_index <- predict(svm.tune, data_test)
+#rmse_walk_index <- rmse(data_test$NatWalkInd, predict_walk_index)
+#print(rmse_walk_index)
+```
+
+
+```{r}
+
+#plot(x=data_test$D5AR, y=data_test$NatWalkInd)
+#points(data_test$D5AR, predict_walk_index, col='red', pch=16)
+
+
+
+```
+
+
+### PCA 
+
+```{r warning=FALSE,include=FALSE, echo=FALSE}
+# https://www.statology.org/principal-components-regression-in-r/
+#data_train %>% select(-c(CBSA_Name, CSA_Name, STATEFP, D1_FLAG))
+
+dt <- data_train %>% select(-c(CBSA_Name, CSA_Name, STATEFP, D1_FLAG))
+
+model_pcr <- pcr(NatWalkInd ~ .,
+                  data = dt,
+                  scale = TRUE,
+                  center = TRUE,
+                  validation="CV")
+
+#validationplot(model_pcr, val.type="R2")
+
+predict_pcr <- predict(model_pcr, data_test, ncomp=75)
+rmse_walk_index <- rmse(data_test$NatWalkInd, predict_pcr)
+print(rmse_walk_index)
+
+
+```
+
+
+
+
+
+```{r warning=TRUE,include=FALSE, echo=FALSE}
+# https://www.r-bloggers.com/2021/05/principal-component-analysis-pca-in-r/
+pc <- prcomp(data_train %>% select(-c(CBSA_Name, CSA_Name, STATEFP, D1_FLAG, NatWalkInd)),
+             rank. = 30,
+             center = TRUE,
+             scale. = TRUE)
+
+summary(pc)
+#biplot(pc, scale =0, cex = 0.1)
+
+predict_walk_ind <- predict(pc, data_test)
+rmse_walk_index <- rmse(data_test$NatWalkInd, predict_walk_ind)
+print(rmse_walk_index)
+
+
+var_explained = pc$sdev^2 / sum(pc$sdev^2)
+qplot(c(1:112), var_explained) + 
+  geom_line() + 
+  xlab("Principal Component") + 
+  ylab("Variance Explained") +
+  ggtitle("Scree Plot") +
+  ylim(0, 1)
+
+
+```
+
+
+```{r warning=FALSE,include=FALSE, echo=FALSE}
+
+```
+
+
