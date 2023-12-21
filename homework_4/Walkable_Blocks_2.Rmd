@@ -1,0 +1,340 @@
+---
+title: "How Walkable Is Your Block?"
+author: "Cliff Lee"
+date: "2023-12-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+library(datasets)
+library(caret)
+library(e1071)
+library(kernlab)
+library(pROC)
+library(performanceEstimation)
+library(ggplot2)
+library(GGally)
+library(kernlab)
+library(tidymodels)
+library(doParallel)
+library(Metrics)
+library(ROCR)
+library(pls)
+library(mice)
+library(corrplot)
+```
+
+
+
+```{r warning=FALSE,include=FALSE, echo=FALSE}
+# Read in the numeric data
+#data_numeric <- read_csv("epa_numeric_mice.csv",show_col_types = FALSE)
+data_numeric <- read_csv("epa_numeric_mice_2.csv",show_col_types = FALSE)
+#CSA_Names <- read_csv("csa_names.csv", show_col_types = FALSE)
+#CBSA_Names <- read_csv("cbsa_names.csv", show_col_types = FALSE)
+
+#data_numeric <- as.data.frame(scale(data_numeric, scale=TRUE, center=TRUE))
+data <- data_numeric
+#data <- cbind(CSA_Names, CBSA_Names, data_numeric)
+
+
+# Two rows with NA's. Just delete them, they have no data. Strange
+which(is.na(data))
+#[1] 20087306 20308046
+
+#only keep the complete cases (remove the three empty ones)
+data <- data[complete.cases(data),]
+
+```
+
+
+
+```{r, include=FALSE, echo=FALSE}
+#data <- data %>% head(n=3000)
+set.seed(456495)
+
+sample_small <- sample(nrow(data), 2000, replace = FALSE)
+data_small <- data[sample_small,]
+```
+
+```{r warning=FALSE,include=FALSE, echo=FALSE}
+sample_set <- sample(nrow(data_small), round(nrow(data_small)*0.80), replace = FALSE)
+
+data_train <- data_small[sample_set,]
+data_test <- data_small[-sample_set,]
+
+
+```
+
+
+
+```{r histograms, echo=FALSE, eval=TRUE}
+
+par(mfrow = c(2, 4))
+
+ds_numeric <- data_small %>% select(!contains("Name"))
+for (i in colnames(ds_numeric)){
+  hist(ds_numeric[[i]], breaks=50, main=i, xlab="", ylab="Frequency")
+}
+```
+
+
+```{r boxplots, echo=FALSE, eval=TRUE}
+
+par(mfrow = c(2, 5))
+
+ds_numeric <- data_small %>% select(!contains("Name"))
+for (i in colnames(ds_numeric)){
+  boxplot(ds_numeric[[i]], main=i)
+}
+```
+
+```{r scatterplots, include=TRUE, echo=FALSE}
+par(mfrow = c(2, 4))
+
+ds_numeric <- data_small %>% select(!contains("Name"))
+for (i in colnames(ds_numeric)){
+  plot(x=ds_numeric$NatWalkInd, y=ds_numeric[[i]] , ylab=i, xlab="NatWalkInd", pch=20, cex=0.4, col="#5D5C5C")
+  lines(lowess(ds_numeric$NatWalkInd, ds_numeric[[i]]), col = "red", lwd=2)
+  #abline(lm(ds_numeric[[i]] ~ NatWalkInd, data = ds_numeric), col = "red", lwd=2)
+
+}
+
+```
+# Correlations
+
+
+### Identifiers
+```{r, echo=FALSE}
+i <- data_small %>% select("OBJECTID","GEOID10","GEOID20","STATEFP","COUNTYFP","TRACTCE","BLKGRPCE","CSA","CBSA","CBSA_POP","CBSA_EMP","CBSA_WRK","NatWalkInd")
+m <- cor(i)
+corrplot(m)
+```
+
+<br/><br/><br/>
+
+### Area
+```{r, echo=FALSE}
+# Area
+i <- data_small %>% select("Ac_Total","Ac_Water","Ac_Land","Ac_Unpr","Shape_Length","Shape_Area","NatWalkInd");m <- cor(i);corrplot(m)
+```
+
+<br/><br/><br/>
+
+### Demographic
+```{r, echo=FALSE}
+# demographic
+i <- data_small %>% select("TotPop","CountHU","HH","P_WrkAge","AutoOwn0","Pct_AO0","AutoOwn1","Pct_AO1","AutoOwn2p","Pct_AO2p","Workers","R_LowWageWk","R_MedWageWk","R_HiWageWk","R_PCTLOWWAGE","TotEmp","NatWalkInd");m <- cor(i);corrplot(m)
+```
+
+<br/><br/><br/>
+
+
+### Employment
+```{r, echo=FALSE}
+# Employment
+i <- data_small %>% select("E5_Ret","E5_Off","E5_Ind","E5_Svc","E5_Ent","E8_Ret","E8_off","E8_Ind","E8_Svc","E8_Ent","E8_Ed","E8_Hlth","E8_Pub","E_LowWageWk","E_MedWageWk","E_HiWageWk","E_PctLowWage","NatWalkInd");m <- cor(i);corrplot(m)
+```
+
+<br/><br/><br/>
+
+
+
+### Density
+```{r, echo=FALSE}
+# Density
+i <- data_small %>% select("D1A", "D1B","D1C","D1C5_RET","D1C5_OFF","D1C5_IND","D1C5_SVC","D1C5_ENT","D1C8_RET","D1C8_OFF","D1C8_IND","D1C8_SVC","D1C8_ENT","D1C8_ED","D1C8_HLTH","D1C8_PUB","D1D","D1_FLAG","NatWalkInd");m <- cor(i);corrplot(m)
+```
+
+<br/><br/><br/>
+
+
+
+### Diversity
+```{r, echo=FALSE}
+# Diversity
+i <- data_small %>% select("D2A_JPHH","D2B_E5MIX","D2B_E5MIXA","D2B_E8MIX","D2B_E8MIXA","D2A_EPHHM","D2C_TRPMX1","D2C_TRPMX2","D2C_TRIPEQ","D2R_JOBPOP","D2R_WRKEMP","D2A_WRKEMP","D2C_WREMLX","NatWalkInd");m <- cor(i);corrplot(m)
+```
+
+<br/><br/><br/>
+
+
+
+### Design
+```{r, echo=FALSE}
+# design
+i <- data_small %>% select("D3A","D3AAO","D3AMM","D3APO","D3B","D3BAO","D3BMM3","D3BMM4","D3BPO3","D3BPO4","NatWalkInd");m <- cor(i);corrplot(m)
+```
+
+<br/><br/><br/>
+
+
+
+### Transit
+```{r, echo=FALSE}
+# transit
+i <- data_small %>% select("D4A","D4B025","D4B050","D4C","D4D","D4E","D5AR","D5AE","D5BR","D5BE","NatWalkInd");m <- cor(i);corrplot(m)
+```
+
+<br/><br/><br/>
+
+
+
+### Destination
+```{r, echo=FALSE}
+# destination
+i <- data_small %>% select("D5CR","D5CRI","D5CE","D5CEI","D5DR","D5DRI","D5DE","D5DEI","NatWalkInd");m <- cor(i);corrplot(m)
+```
+
+<br/><br/><br/>
+
+
+
+### Ranked Indexes
+```{r, echo=FALSE}
+# index
+i <- data_small %>% select("D2A_Ranked","D2B_Ranked","D3B_Ranked","D4A_Ranked","NatWalkInd");m <- cor(i);corrplot(m)
+
+```
+
+
+```{r warning=FALSE,include=FALSE, echo=FALSE}
+data_small <- as.data.frame(scale(data_small, scale=TRUE, center=TRUE))
+```
+
+
+
+```{r warning=FALSE,include=FALSE, echo=FALSE}
+
+#data_train <- data_train %>% select(!contains("_Name"))
+#data_train <- data_train[81:115]
+
+#data_test <- data_test %>% select(!contains("_Name"))
+#data_test <- data_test[81:115]
+```
+
+```{r warning=FALSE,include=FALSE, echo=FALSE, eval = FALSE}
+# Tuning is faster in parallel
+all_cores <- parallel::detectCores(logical = FALSE)
+cl <- makeCluster(all_cores)
+registerDoParallel(cl)
+```
+
+
+### SVM with Radial Kernel
+```{r include=FALSE, echo=TRUE, eval = FALSE, warnings=FALSE}
+
+ctrl <- trainControl(method="repeatedcv",
+                     number = 10                          # 10 folds
+                     )
+
+grid <- expand.grid(sigma = 1e-08 * 10^(seq(0,6,1)),
+                    C = seq(10, 1000,by=5)
+                    )
+
+
+# for this data set, list the colnames where there is no variability
+# so it doesn't trigger a warning from the train function
+cn <- names(data_train[, sapply(data_train, function(v) var(v, na.rm=TRUE)==0)])
+
+
+start_time <- Sys.time()
+svm.tune <- train(NatWalkInd ~., 
+                  data= (data_train %>% select(-c(cn))),
+                  method = "svmRadial",
+                  metric="RMSE",
+                  tuneGrid = grid,
+                  trControl=ctrl,
+                  na.action=na.exclude)
+end_time <- Sys.time()
+print(end_time - start_time)
+
+
+# Save the model
+####saveRDS(svm.tune, 'svm_tune_2.rds' )
+#new_svm.tune <- readRDS('svm_tune.rds')
+```
+
+
+
+```{r eval = TRUE, include=TRUE, echo=FALSE}
+svm.tune <- readRDS('svm_tune_2.rds' )
+print("The best values for sigma and C:")
+print(svm.tune$bestTune)
+```
+
+
+```{r eval = TRUE, include=TRUE, echo=FALSE}
+r <- svm.tune$results
+plot(r$C, r$RMSE, xlab="C", ylab="RMSE", main="Training Errors vs Soft Error Margin")
+```
+
+
+```{r warning=FALSE,include=TRUE, echo=FALSE, eval=TRUE}
+predict_walk_index <- predict(svm.tune, data_test)
+rmse_walk_index <- rmse(data_test$NatWalkInd, predict_walk_index)
+print(paste0("Predicted SVR RMSE:", round(rmse_walk_index,2)))
+```
+
+
+
+```{r warning=FALSE,include=TRUE, echo=FALSE, eval=TRUE}
+plot(x=data_test$D5AR, y=data_test$NatWalkInd, xlab="Jobs Within 45 Minutes Travel Time", ylab="National Walkability Index", main="Predicted Walkability Index")
+points(data_test$D5AR, predict_walk_index, col='red', pch=16)
+```
+
+
+
+### PCA 
+
+
+```{r warning=TRUE,include=FALSE, echo=FALSE, eval=FALSE}
+# https://www.r-bloggers.com/2021/05/principal-component-analysis-pca-in-r/
+
+start_time <- Sys.time()
+pc <- prcomp(data_train, 
+             rank. = 30,
+             )
+end_time <- Sys.time()
+print(end_time - start_time)
+
+#####saveRDS(pc, 'pca_prcomp_2.rds' )
+
+```
+
+```{r include=TRUE, echo=FALSE}
+pc <- readRDS('pca_prcomp_2.rds' )
+
+summary(pc)
+#biplot(pc, scale =0, cex = 0.1)
+
+predict_walk_ind <- predict(pc, data_test)
+predict_walk_ind <- predict_walk_ind[,c(30)]
+rmse_walk_index <- rmse(data_test$NatWalkInd, predict_walk_ind)
+print(paste0("Predicted PCR RMSE:", round(rmse_walk_index,2)))
+```
+
+
+```{r include=TRUE, echo=FALSE, warning=FALSE}
+
+var_explained <- pc$sdev^2 / sum(pc$sdev^2)
+var_explained <- var_explained[1:50]
+
+qplot(c(1:50), var_explained) + 
+  geom_line() + 
+  xlab("Principal Component") + 
+  ylab("Variance Explained") +
+  ggtitle("Scree Plot") +
+  ylim(0, 1)
+
+```
+
+```{r warning=FALSE,include=TRUE, echo=FALSE, eval=TRUE}
+plot(x=data_test$D5AR, y=data_test$NatWalkInd, xlab="Jobs Within 45 Minutes Travel Time", ylab="National Walkability Index", main="Predicted Walkability Index")
+points(data_test$D5AR, predict_walk_ind, col='red', pch=16)
+```

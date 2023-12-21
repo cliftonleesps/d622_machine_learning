@@ -25,25 +25,86 @@ library(doParallel)
 library(Metrics)
 library(ROCR)
 library(pls)
-
+library(mice)
 ```
+
+
 
 ```{r warning=FALSE,include=FALSE, echo=FALSE}
 #data <- read_csv("EPA_SmartLocationDatabase_V3_Jan_2021_Final.csv", show_col_types = FALSE)
 data <- read_csv("test.csv", show_col_types = FALSE)
 
+data <- data %>% mutate(CSA_Name = ifelse(is.na(CSA_Name), "", CSA_Name),
+                        CBSA_Name = ifelse(is.na(CBSA_Name), "", CBSA_Name),
+                        )
 
-#summary(data)
+data$CSA_Name <- as.factor(data$CSA_Name)
+data$CBSA_Name <- as.factor(data$CBSA_Name)
+
+
+dmy <- dummyVars(" ~ .", data = data)
+dmy <- data.frame(predict(dmy, newdata = data))
+
+CSA_Names <- dmy %>% select(starts_with("CSA_Name"))
+CBSA_Names <- dmy %>% select(starts_with("CBSA_Name"))
+#write_csv(CSA_Names, "csa_names.csv")
+#write_csv(CBSA_Names, "cbsa_names.csv")
+
+data <- cbind(CSA_Names,CBSA_Names, data_numeric)
+data <- data_numeric
+
+#NatWalkInd <- data$NatWalkInd
 ```
-
 
 ```{r warning=FALSE,include=FALSE, echo=FALSE}
 #colnames(data_train)
 
 data$CSA_Name <- as.factor(data$CSA_Name)
 data$CBSA_Name <- as.factor(data$CBSA_Name)
+```
 
+```{r}
+summary(data)
+```
+
+
+```{r}
+# https://appsilon.com/imputation-in-r/
+# MICE for: HH, CountHU, D4D, D4E,   D1A  D1C8_OFF
+
+# only get numeric columns
+d <- select_if(data, is.numeric)
+d <- d %>%select(-c("CSA", "CBSA", "GEOID10", "GEOID20"))
+
+start_time <- Sys.time()
+#c <- complete(mice(d, method = "lasso.norm"))
+#c <- complete(mice(d, method = "cart"))
+end_time <- Sys.time()
+
+print(end_time - start_time)
+
+# Time difference of 54.86031 mins
+# write_csv(c, "epa_numeric_mice.csv")
+
+data_numeric <- read_csv("epa_numeric_mice.csv", show_col_types = FALSE)
+#data_numeric <- data_numeric[complete.cases(data_numeric),]
+
+```
+
+```{r}
+# scale the data
+data <- as.data.frame(scale(data_numeric, scale=TRUE, center=TRUE))
+#data$NatWalkInd  <-  NatWalkInd
+#data <- data[complete.cases(data),]
+
+```
+
+
+```{r}
 # Exclude any row with NA's
+#data <- data[complete.cases(data),]
+#which(is.na(data))
+data <- data %>% head(n=3000)
 data <- data[complete.cases(data),]
 
 ```
@@ -90,17 +151,32 @@ grid <- expand.grid(sigma = 1e-04,                        #sigma = 1e-08 * 10^(s
 
 
 #train_control <- trainControl(method="repeatedcv", number=10, repeats=3)
+
+cn <- names(data_train[, sapply(data_train, function(v) var(v, na.rm=TRUE)==0)])
+#cn <- c(cn, "STATEFP", "D1_FLAG")
+
+
 start_time <- Sys.time()
 svm.tune <- train(NatWalkInd ~., 
-                  data=data_train %>% select(-c(CBSA_Name, CSA_Name, STATEFP, D1_FLAG)),
+                  #data=data_train, # %>% select(-c(CBSA_Name, CSA_Name, STATEFP, D1_FLAG)),
+                  #data= data_train %>% select(-c( STATEFP, D1_FLAG)) %>% select(-c(constant_names))
+                  data= data_train %>% select(-c(cn)),
+                  #data= data_train,
                   method = "svmRadial",
-                  preProc=c("center", "scale"),
+                  #preProc=c("center", "scale"),
                   metric="RMSE",
                   tuneGrid = grid,
-                  trControl=ctrl)
+                  trControl=ctrl,
+                  na.action=na.exclude)
 end_time <- Sys.time()
 
+
 print(end_time - start_time)
+
+
+# Save the model
+#saveRDS(svm.tune, 'svm_tune.rds' )
+#new_svm.tune <- readRDS('svm_tune.rds')
 ```
 
 
@@ -117,9 +193,9 @@ print(end_time - start_time)
 
 
 ```{r warning=FALSE,include=FALSE, echo=TRUE, eval=FALSE}
-#predict_walk_index <- predict(svm.tune, data_test)
-#rmse_walk_index <- rmse(data_test$NatWalkInd, predict_walk_index)
-#print(rmse_walk_index)
+predict_walk_index <- predict(svm.tune, data_test)
+rmse_walk_index <- rmse(data_test$NatWalkInd, predict_walk_index)
+print(rmse_walk_index)
 ```
 
 
@@ -187,7 +263,6 @@ qplot(c(1:112), var_explained) +
 ```
 
 
-```{r warning=FALSE,include=FALSE, echo=FALSE}
 
 ```
 
